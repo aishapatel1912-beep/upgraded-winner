@@ -1,4 +1,4 @@
-"""Binance spot aggTrade feed — rolling price buffer for momentum signals."""
+"""Binance USDT-M futures aggTrade feed — rolling price buffer for momentum signals."""
 
 from __future__ import annotations
 
@@ -12,10 +12,12 @@ import websockets  # type: ignore
 
 STALE_CUTOFF_SECS = 5.0
 _MAX_BUFFER_SECS = 120.0
+_CONNECT_TIMEOUT_SECS = 15.0
+_FUTURES_WS_BASE = "wss://fstream.binance.com"
 
 
 class BinanceAggTradeSignal:
-    """One spot aggTrade connection per symbol; shared across workers on that asset."""
+    """One futures aggTrade connection per symbol; shared across workers on that asset."""
 
     _instances: Dict[str, "BinanceAggTradeSignal"] = {}
     _instance_lock = asyncio.Lock()
@@ -82,22 +84,44 @@ class BinanceAggTradeSignal:
         self._prices.append((now, price))
         self._trim(now)
 
+    @staticmethod
+    def _parse_trade_message(raw: str) -> Optional[Tuple[float, float]]:
+        msg = json.loads(raw)
+        data = msg.get("data", msg)
+        px = float(data.get("p", 0))
+        if px <= 0:
+            return None
+        trade_ts = float(data.get("T", 0)) / 1000.0
+        return px, trade_ts if trade_ts > 0 else t.time()
+
     async def _run(self) -> None:
         if self._running:
             return
         self._running = True
         stream = f"{self.symbol.lower()}usdt@aggTrade"
-        url = f"wss://stream.binance.com:9443/ws/{stream}"
+        url = f"{_FUTURES_WS_BASE}/ws/{stream}"
         while True:
             try:
-                async with websockets.connect(url, ping_interval=20, ping_timeout=15) as ws:
-                    print(f"📡 [Binance spot aggTrade] Connected: {stream}")
+                print(
+                    f"📡 [Binance futures aggTrade] {self.symbol}: "
+                    f"connecting to {url} (timeout {_CONNECT_TIMEOUT_SECS}s)..."
+                )
+                async with websockets.connect(
+                    url,
+                    ping_interval=20,
+                    ping_timeout=15,
+                    open_timeout=_CONNECT_TIMEOUT_SECS,
+                ) as ws:
+                    print(f"📡 [Binance futures aggTrade] Connected: {stream}")
                     async for raw in ws:
-                        msg = json.loads(raw)
-                        px = float(msg.get("p", 0))
-                        if px > 0:
-                            trade_ts = float(msg.get("T", 0)) / 1000.0
-                            self._on_trade(px, trade_ts if trade_ts > 0 else None)
+                        parsed = self._parse_trade_message(raw)
+                        if parsed is None:
+                            continue
+                        px, trade_ts = parsed
+                        self._on_trade(px, trade_ts)
             except Exception as e:
-                print(f"⚠️ [Binance aggTrade] {self.symbol}: {e} — reconnecting in 3s")
+                print(
+                    f"⚠️ [Binance aggTrade] {self.symbol}: {e} — "
+                    f"reconnecting in 3s (endpoint: {_FUTURES_WS_BASE})"
+                )
                 await asyncio.sleep(3)

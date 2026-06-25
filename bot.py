@@ -3817,7 +3817,7 @@ def create_dashboard(bots):
         Layout(
             Panel(
                 f"[bold cyan]EMILIANO BOT — Momentum / Legacy Strategies | "
-                f"Binance Spot aggTrade[/bold cyan]\n"
+                f"Binance Futures aggTrade[/bold cyan]\n"
                 f"Schedule ({_tz_label}): {_schedule_str}",
                 style="bold green", box=box.ROUNDED,
             ),
